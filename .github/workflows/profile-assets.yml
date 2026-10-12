@@ -1,0 +1,102 @@
+name: Refresh profile assets
+
+on:
+  schedule:
+    - cron: "23 0 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/profile-assets.yml"
+      - "scripts/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: profile-assets
+  cancel-in-progress: true
+
+env:
+  OWNER: ${{ github.repository_owner }}
+  CARD_THEME: hide_border=false&border_color=2d2a55&border_radius=8&bg_color=0d1117&title_color=a78bfa&text_color=c9d1d9&icon_color=8b5cf6
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Every generator writes into .build/. Only cards that rendered cleanly are
+      # copied into profile/, so a failed API call never replaces a good card.
+      - name: Stats card
+        continue-on-error: true
+        uses: stats-organization/github-readme-stats-action@2c498845f71017821efaad14293ebc736156ef21 # v2.1.0
+        with:
+          card: stats
+          options: username=${{ env.OWNER }}&show_icons=true&include_all_commits=true&rank_icon=github&ring_color=8b5cf6&custom_title=GitHub%20Statistics&${{ env.CARD_THEME }}
+          path: .build/stats.svg
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fail_on_error: true
+
+      - name: Top languages card
+        continue-on-error: true
+        uses: stats-organization/github-readme-stats-action@2c498845f71017821efaad14293ebc736156ef21 # v2.1.0
+        with:
+          card: top-langs
+          options: username=${{ env.OWNER }}&layout=compact&langs_count=8&hide=jupyter%20notebook&custom_title=Most%20Used%20Languages&${{ env.CARD_THEME }}
+          path: .build/top-langs.svg
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fail_on_error: true
+
+      - name: Streak card
+        continue-on-error: true
+        uses: DenverCoder1/github-readme-streak-stats@d855de1a23fe45bdda5ffbc28a6d4b80b0f107e1 # v1.8.0
+        with:
+          options: user=${{ env.OWNER }}&border_radius=8&background=0d1117&border=2d2a55&stroke=2d2a55&ring=8b5cf6&fire=a78bfa&currStreakNum=ffffff&sideNums=ffffff&currStreakLabel=a78bfa&sideLabels=c9d1d9&dates=8b949e
+          path: .build/streak.svg
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trophies
+        continue-on-error: true
+        uses: ryo-ma/github-profile-trophy@e3c89df995e92e67cdd4b2acaab9d974583dc1f7 # master
+        with:
+          username: ${{ env.OWNER }}
+          output_path: .build/trophies.svg
+          token: ${{ secrets.GITHUB_TOKEN }}
+          theme: tokyonight
+
+      - name: Activity graph
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/activity_graph.py "$OWNER" .build/activity-graph.svg 26
+
+      - name: Contribution snake
+        continue-on-error: true
+        uses: Platane/snk/svg-only@d8f6715049803e982ee5ff501b6b9b7d5deeb09b # v3.5.0
+        with:
+          github_user_name: ${{ env.OWNER }}
+          outputs: |
+            .build/snake-dark.svg?color_snake=#a78bfa&color_dots=#161b22,#2e1065,#5b21b6,#7c3aed,#c4b5fd
+            .build/snake-light.svg?color_snake=#6d28d9&color_dots=#ebedf0,#ddd6fe,#a78bfa,#7c3aed,#4c1d95
+
+      - name: Publish cards that rendered cleanly
+        run: |
+          mkdir -p profile
+          for card in stats top-langs streak trophies activity-graph snake-dark snake-light; do
+            file=".build/$card.svg"
+            if [ ! -s "$file" ]; then
+              echo "::warning::$card was not generated; keeping the previous version"
+            elif grep -qiE "something went wrong|rate limit|maximum retries" "$file"; then
+              echo "::warning::$card rendered an error card; keeping the previous version"
+            else
+              cp "$file" "profile/$card.svg"
+            fi
+          done
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add profile
+          git commit -m "Refresh profile assets" || exit 0
+          git push
